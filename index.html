@@ -2,21 +2,40 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>MALPACA-OS Run</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100dvh; background-color: #000000; overflow: hidden; touch-action: none; }
-        #game-container { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; position: relative; }
-        #crt-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: repeating-linear-gradient(transparent 0px, transparent 2px, rgba(0, 0, 0, 0.25) 2px, rgba(0, 0, 0, 0.25) 4px); pointer-events: none; z-index: 999; }
-    </style>
+    body {
+        margin: 0;
+        padding: 0;
+        background-color: #050505;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+    }
+
+    #game-container {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        /* 這兩行將 div 的中心點位移到瀏覽器中心 */
+        transform: translate(-50%, -50%);
+        
+        width: 390px;
+        height: 844px;
+        
+        /* 避免遊戲內容溢出 */
+        overflow: hidden;
+    }
+</style>
 </head>
 <body>
     <div id="game-container"></div>
     <div id="crt-overlay"></div>
     <script>
-        const GAME_WIDTH = window.innerWidth;
-        const GAME_HEIGHT = window.innerHeight;
+        const GAME_WIDTH = 390;
+        const GAME_HEIGHT = 844;
         
         const GRAVITY = 4500;                    
         const JUMP_VELOCITY = -1350;             
@@ -504,10 +523,25 @@
         }
         
         // 把 StartScene 完全從這裡移除了，不會再找錯場景
-        const config = { 
-            type: Phaser.AUTO, parent: 'game-container', width: GAME_WIDTH, height: GAME_HEIGHT, backgroundColor: '#000000', scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, physics: { default: 'arcade', arcade: { debug: false } }, 
-            scene: [BootScene, TutorialScene, GameScene, GameOverScene, GameWinScene] 
-        }; 
+        const config = {
+            type: Phaser.AUTO,
+            parent: 'game-container', // 記得確保你的 index.html 裡面有一個 <div id="game-container"></div>
+            width: GAME_WIDTH,
+            height: GAME_HEIGHT,
+            backgroundColor: '#000000',
+            pixelArt: true,           // 【推薦】這會讓你的 ASCII 風格像素更清晰
+            scale: {
+                mode: Phaser.Scale.FIT,             // 強制維持比例，避免變形
+                autoCenter: Phaser.Scale.CENTER_BOTH, // 自動置中
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    debug: false
+                }
+            },
+            scene: [BootScene, TutorialScene, GameScene, GameOverScene, GameWinScene]
+        };
         const game = new Phaser.Game(config);
     </script>
 </body>
