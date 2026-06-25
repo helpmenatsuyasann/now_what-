@@ -22,8 +22,8 @@
         /* 這兩行將 div 的中心點位移到瀏覽器中心 */
         transform: translate(-50%, -50%);
         
-        width: 390px;
-        height: 844px;
+        width: 371px;
+        height: 802px;
         
         /* 避免遊戲內容溢出 */
         overflow: hidden;
@@ -491,13 +491,38 @@
             init(data) { this.finalScore = data.score; } 
             create() { 
                 this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.85).setOrigin(0).setDepth(20); 
+                
+                // 1. FATAL ERROR (純紅色字體 + 紅色光暈)
                 const goText = `> FATAL ERROR\n\n  07.11 NOW...WHAT?\n\n LIVE AT THE WALL\n\n SCORE: ${String(this.finalScore).padStart(6, '0')}`; 
-                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.4, goText, { ...TEXT_STYLE, fontSize: '24px', align: 'center', lineSpacing: 10 }).setOrigin(0.5).setDepth(21); 
-                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.65, "> TAP TO RESTART", { ...TEXT_STYLE, fontSize: '22px' }).setOrigin(0.5).setDepth(21); 
+                
+                // 這裡我們不使用預設的 TEXT_STYLE，直接獨立寫死紅色的樣式
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.4, goText, { 
+                    fontFamily: FONT_FAMILY,
+                    fontSize: '24px', 
+                    align: 'center', 
+                    lineSpacing: 10,
+                    color: '#ff0000', // 字體紅色
+                    shadow: { offsetX: 0, offsetY: 0, color: '#ff0000', blur: 8, fill: true } // 光暈也強制改成紅色！
+                }).setOrigin(0.5).setDepth(21); 
+                
+                // 2. RESTART 按鈕 (維持原本的綠色設定)
+                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.65, "> TAP TO RESTART", { 
+                    ...TEXT_STYLE, 
+                    fontSize: '22px' 
+                }).setOrigin(0.5).setDepth(21); 
+
+                // 3. 讓按鈕閃爍的動畫
+                this.tweens.add({ 
+                    targets: tapText, 
+                    alpha: 0, 
+                    duration: 500,    // 閃爍速度
+                    yoyo: true,       // 變透明後自動變回來
+                    repeat: -1        // 無限循環
+                });
                 
                 this.input.once('pointerdown', () => { 
                     const gs = this.scene.get('GameScene'); 
-                    gs.music.stop(); 
+                    if(gs.music) gs.music.stop(); 
                     this.scene.stop('GameScene'); 
                     this.scene.start('TutorialScene'); // 死掉後回到 Tutorial
                 }); 
