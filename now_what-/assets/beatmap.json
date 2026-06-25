@@ -1,0 +1,84 @@
+{
+  "bpm": 140,
+  "offset": 0,
+  "beats": [
+    {
+      "time": 1.25,
+      "type": "spike"
+    },
+    {
+      "time": 2.95,
+      "type": "spike"
+    },
+    {
+      "time": 4.62,
+      "type": "platform_low"
+    },
+    {
+      "time": 4.9,
+      "type": "platform_low"
+    },
+    {
+      "time": 8.05,
+      "type": "spike"
+    },
+    {
+      "time": 9.75,
+      "type": "spike"
+    },
+    {
+      "time": 12.32,
+      "type": "platform_low"
+    },
+    {
+      "time": 12.75,
+      "type": "platform_high"
+    },
+    {
+      "time": 14.70,
+      "type": "platform_low"
+    },
+    {
+      "time": 15.55,
+      "type": "spike"
+    },
+    {
+      "time": 16.45,
+      "type": "platform_low"
+    },
+    {
+      "time": 18.4,
+      "type": "spike"
+    },
+    {
+      "time": 19.77,
+      "type": "platform_low"
+    },
+    {
+      "time": 20.2,
+      "type": "platform_high"
+    },
+    {
+      "time": 21.85,
+      "type": "spike"
+    },
+    {
+      "time": 23.12,
+      "type": "platform_low"
+    },
+    {
+      "time": 23.55,
+      "type": "platform_high"
+    },
+    {
+      "time": 24.02,
+      "type": "platform_low"
+    },
+    {
+      "time": 26.1,
+      "type": "spike"
+    }
+
+  ]
+}
+
