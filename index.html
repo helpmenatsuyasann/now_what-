@@ -19,21 +19,62 @@
         position: absolute;
         top: 50%;
         left: 50%;
-        /* 這兩行將 div 的中心點位移到瀏覽器中心 */
         transform: translate(-50%, -50%);
-        
         width: 371px;
         height: 802px;
-        
-        /* 避免遊戲內容溢出 */
         overflow: hidden;
+    }
+
+    /* ==========================================
+       【排行榜專用】終端機風格名字輸入框 
+       ========================================== */
+    #leaderboard-input-zone {
+        position: absolute;
+        top: 45%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 9999; /* 確保在遊戲 Canvas 最上層 */
+        background-color: rgba(5, 5, 5, 0.95);
+        border: 2px dashed #00ff41;
+        padding: 25px 20px;
+        width: 280px;
+        text-align: center;
+        font-family: 'Courier New', Courier, monospace;
+        box-shadow: 0 0 15px rgba(0, 255, 65, 0.3);
+        display: none; /* 預設隱藏 */
+        pointer-events: auto; /* 確保可以點擊輸入 */
+    }
+    #leaderboard-input-zone input {
+        background: #000; border: 1px solid #00aa29; color: #00ff41;
+        font-family: 'Courier New', Courier, monospace; font-size: 16px;
+        padding: 8px; width: 80%; text-align: center; outline: none;
+        text-transform: uppercase; margin-bottom: 15px;
+    }
+    #leaderboard-input-zone button {
+        background: #00aa29; border: none; color: #000;
+        font-family: 'Courier New', Courier, monospace; font-weight: bold;
+        font-size: 14px; padding: 6px 15px; cursor: pointer;
     }
 </style>
 </head>
 <body>
     <div id="game-container"></div>
     <div id="crt-overlay"></div>
+    
+    <div id="leaderboard-input-zone">
+        <label style="color:#00ff41; font-size:14px; display:block; margin-bottom:15px;">> ENTER RECOVERY ID_</label>
+        <input type="text" id="player-name-input" maxlength="10" placeholder="MAX 10 CHARS" autocomplete="off">
+        <br>
+        <button id="submit-score-btn">EXECUTE</button>
+    </div>
+
     <script>
+        // ==========================================
+        // 【LootLocker 排行榜關鍵資訊設定】
+        // ==========================================
+        const LOOTLOCKER_SECRET = 'dev_07e279f1949c45438496097c5d572348'; // 填入你的 Game API Key
+        const LEADERBOARD_ID = '35294';
+
         const GAME_WIDTH = 390;
         const GAME_HEIGHT = 844;
         
@@ -51,7 +92,34 @@
         const ALPACA_FONT_SIZE = 10;             
         const OBSTACLE_FONT_SIZE = 22;           
         const HITBOX_SCALE_X = 0.6;              
-        const HITBOX_SCALE_Y = 0.8;              
+        const HITBOX_SCALE_Y = 0.8;       
+        // ==========================================
+        // 【新增】Endless 模式專屬調整常數
+        // ==========================================
+        // ==========================================
+        // 【優化】Endless 模式陣列組合池設定
+        // ==========================================
+        const ENDLESS_INITIAL_TRAVEL_TIME = 1800; // 物件飛過螢幕的總時間(毫秒)
+        const PATTERN_DELAY = 430;                // 組合內物件發射的固定時間差 (0.43 秒 = 430 毫秒)
+        const ENDLESS_MIN_INTERVAL = 1300;        // 兩個「組合」之間的最小安全時間間隔(毫秒)，用來防止死局
+
+        // 這裡定義你想要的各種關卡組合，可以隨時自由新增或刪減，完全不用動到核心邏輯！
+        const ENDLESS_PATTERNS = [
+            ["spike"],                                                          // 單個地面刺
+            ["spike", "spike"],                                                 // 連續兩個地面刺
+            ["platform_low", "platform_high"],                                  // 組合 1: low + high
+            ["platform_low", "platform_high", "platform_low"], // 組合 2: 雙重階梯
+            ["platform_low", "platform_low", "platform_high", "platform_high"], // 組合 3: 雙低雙高
+            ["platform_low", "platform_high", "platform_high"],                 // 組合 4: 一低雙高
+            ["platform_low", "platform_high", "platform_high", "platform_low"]  // 組合 5: 樓梯上下
+        ];  
+        // ==========================================
+        // 【新增】Endless 模式專用物理參數 (俐落跳躍)
+        // ==========================================
+        // 原本 GRAVITY 是 4500，調高到 8000 讓降落極快
+        const ENDLESS_GRAVITY = 7000;          
+        // 原本 JUMP_VELOCITY 是 -1350，按比例強化到 -1800 確保能跳上 high platform
+        const ENDLESS_JUMP_VELOCITY = -1800;
 
         const COLOR_MAIN = '#00ff41';
         const COLOR_DIM = '#00aa29';
@@ -59,7 +127,90 @@
 
         const TEXT_STYLE = { fontFamily: FONT_FAMILY, color: COLOR_MAIN, shadow: { offsetX: 0, offsetY: 0, color: COLOR_MAIN, blur: 5, fill: true } };
 
-        // ASCII 羊駝雙幀動畫
+        // ==========================================
+        // 【新增】LootLocker 後端 API 封裝模組
+        // ==========================================
+        // ==========================================
+        // 【優化】LootLocker 後端 API 封裝模組 (智慧略過重複請求)
+        // ==========================================
+        const LootLocker = {
+            sessionToken: 'dev_07e279f1949c45438496097c5d572348',
+            baseUrl: 'https://api.lootlocker.io/game',
+            
+            getDeviceUUID: function() {
+                let uuid = localStorage.getItem('malpaca_uuid');
+                if (!uuid) {
+                    uuid = 'LMP-' + Math.random().toString(36).substring(2, 11).toUpperCase();
+                    localStorage.setItem('malpaca_uuid', uuid);
+                }
+                return uuid;
+            },
+            initSession: async function() {
+                try {
+                    let response = await fetch(`${this.baseUrl}/v2/session/guest`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            game_key: LOOTLOCKER_SECRET,
+                            player_identifier: this.getDeviceUUID(),
+                            game_version: "1.0"
+                        })
+                    });
+                    let data = await response.json();
+                    if (data.session_token) {
+                        this.sessionToken = data.session_token;
+                        return true;
+                    }
+                    return false;
+                } catch (e) { return false; }
+            },
+            submitScore: async function(name, score) {
+                let authorized = await this.initSession();
+                if (!authorized) return null;
+                try {
+                    // 【加速核心】檢查名字是否與上次相同，若相同則不發送 PATCH 請求
+                    let syncedName = localStorage.getItem('malpaca_synced_name');
+                    if (name !== syncedName) {
+                        await fetch(`https://api.lootlocker.io/game/player/name`, {
+                            method: 'PATCH',
+                            headers: { 
+                                'Content-Type': 'application/json', 
+                                'x-session-token': this.sessionToken,
+                                'LL-Version': '2021-03-01'
+                            },
+                            body: JSON.stringify({ name: name })
+                        });
+                        localStorage.setItem('malpaca_synced_name', name);
+                    }
+                    
+                    // 直接發送分數
+                    let response = await fetch(`${this.baseUrl}/leaderboards/${LEADERBOARD_ID}/submit`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-session-token': this.sessionToken },
+                        body: JSON.stringify({ score: score })
+                    });
+                    return await response.json();
+                } catch (e) { return null; }
+            },
+            getRankings: async function() {
+                let authorized = await this.initSession();
+                if (!authorized) return null;
+                try {
+                    let response = await fetch(`${this.baseUrl}/leaderboards/${LEADERBOARD_ID}/list?count=5`, {
+                        method: 'GET',
+                        headers: { 'x-session-token': this.sessionToken }
+                    });
+                    let data = await response.json();
+                    return {
+                        top5: data.items || [],
+                        memberRank: data.member ? data.member.rank : null,
+                        memberScore: data.member ? data.member.score : null,
+                        memberName: data.member && data.member.player ? data.member.player.name : 'YOU',
+                        memberMetadata: data.member ? data.member.metadata : null
+                    };
+                } catch (e) { return null; }
+            }
+        };
         const ALPACA_FRAME_A = [
             "        ∩∩",
             "      （-ω-）",
@@ -120,15 +271,19 @@
                 this.load.audio('music', 'assets/music.mp3');
                 this.load.json('beatmap', `assets/beatmap.json?v=${timestamp}`); 
                 this.load.image('bg', `assets/bg.png?v=${timestamp}`);
+                
+                // 【新增】載入無盡模式音樂
+                this.load.audio('endlessMusic', 'assets/endless.mp3');
             }
-            create() { this.scene.start('TutorialScene'); }
+            create() { 
+                // 背景靜默登入 LootLocker，節省後續等待時間
+                //LootLocker.initSession();
+                this.scene.start('TutorialScene'); 
+            }
         }
 
         class TutorialScene extends Phaser.Scene {
-            constructor() {
-                super('TutorialScene');
-            }
-
+            constructor() { super('TutorialScene'); }
             create() {
                 const width = GAME_WIDTH;
                 const height = GAME_HEIGHT;
@@ -138,7 +293,6 @@
                 const floorY = centerY + 40;
 
                 const titleStyle = { fontFamily: FONT_FAMILY, color: COLOR_MAIN, fontSize: '18px', align: 'center', shadow: { offsetX: 0, offsetY: 0, color: COLOR_MAIN, blur: 5, fill: true } };
-                // 字體提亮，加入一點光暈
                 const descStyle = { fontFamily: FONT_FAMILY, color: COLOR_MAIN, fontSize: '14px', align: 'center', shadow: { offsetX: 0, offsetY: 0, color: COLOR_MAIN, blur: 3, fill: true } };
                 
                 this.add.text(width / 2, height * 0.15, "> SYSTEM TUTORIAL", titleStyle).setOrigin(0.5);
@@ -152,113 +306,70 @@
                 graphics.lineTo(panelWidth * 2, height * 0.7);
                 graphics.strokePath();
 
-                // ==========================================
-                // 左格：原地跳躍 (Panel 1)
-                // ==========================================
                 const p1X = panelWidth * 0.5;
                 this.add.text(p1X, floorY, "==========", titleStyle).setOrigin(0.5, 0);
                 this.add.text(p1X, floorY + 50, "TAP TO JUMP", descStyle).setOrigin(0.5, 0);
-                
                 const alpaca1 = this.add.text(p1X, floorY, ALPACA_FRAME_A, { ...TEXT_STYLE, fontSize: '8px' }).setOrigin(0.5, 1);
 
                 const animatePanel1 = () => {
-                    if (!alpaca1.scene) return; // 場景切換防呆
+                    if (!alpaca1.scene) return; 
                     alpaca1.setY(floorY).setText(ALPACA_FRAME_A);
-                    
                     this.time.delayedCall(500, () => {
                         if (!alpaca1.scene) return;
                         alpaca1.setText(ALPACA_JUMP_FRAME);
                         this.tweens.add({
-                            targets: alpaca1,
-                            y: floorY - 45,
-                            duration: 250,
-                            yoyo: true,
-                            ease: 'Quad.easeOut',
-                            onComplete: () => {
-                                alpaca1.setText(ALPACA_FRAME_A);
-                                this.time.delayedCall(300, animatePanel1); 
-                            }
+                            targets: alpaca1, y: floorY - 45, duration: 250, yoyo: true, ease: 'Quad.easeOut',
+                            onComplete: () => { alpaca1.setText(ALPACA_FRAME_A); this.time.delayedCall(300, animatePanel1); }
                         });
                     });
                 };
                 animatePanel1();
 
-                // ==========================================
-                // 中格：平台下沉 (Panel 2)
-                // ==========================================
                 const p2X = panelWidth * 1.5;
                 this.add.text(p2X, floorY + 50, "PLATFORM SINKS", descStyle).setOrigin(0.5, 0);
-                
                 const platform2 = this.add.text(p2X, floorY - 20, "[════]", titleStyle).setOrigin(0.5, 0);
                 const alpaca2 = this.add.text(p2X, floorY - 20, ALPACA_FRAME_A, { ...TEXT_STYLE, fontSize: '8px' }).setOrigin(0.5, 1);
 
                 const animatePanel2 = () => {
-                    if (!alpaca2.scene) return; // 場景切換防呆
+                    if (!alpaca2.scene) return; 
                     platform2.setY(floorY - 20);
                     alpaca2.setY(floorY - 20).setText(ALPACA_FRAME_A);
-                    
                     this.time.delayedCall(400, () => {
                         if (!alpaca2.scene) return;
                         this.tweens.add({
-                            targets: [alpaca2, platform2],
-                            y: '+=45', 
-                            duration: 1000,
-                            ease: 'Sine.easeInOut',
-                            onComplete: () => {
-                                this.time.delayedCall(200, animatePanel2); 
-                            }
+                            targets: [alpaca2, platform2], y: '+=45', duration: 1000, ease: 'Sine.easeInOut',
+                            onComplete: () => { this.time.delayedCall(200, animatePanel2); }
                         });
                     });
                 };
                 animatePanel2();
 
-                // ==========================================
-                // 右格：尖刺死亡 (Panel 3)
-                // ==========================================
                 const p3X = panelWidth * 2.5;
                 this.add.text(p3X, floorY, "==========", titleStyle).setOrigin(0.5, 0);
                 this.add.text(p3X, floorY + 50, "AVOID SPIKES", descStyle).setOrigin(0.5, 0);
-                
                 const alpaca3 = this.add.text(p3X - 10, floorY, ALPACA_FRAME_A, { ...TEXT_STYLE, fontSize: '8px' }).setOrigin(0.5, 1);
                 const spike3 = this.add.text(p3X + 50, floorY, "/\\", titleStyle).setOrigin(0.5, 1);
 
                 const animatePanel3 = () => {
-                    if (!alpaca3.scene) return; // 場景切換防呆
+                    if (!alpaca3.scene) return; 
                     alpaca3.setColor(COLOR_MAIN).setText(ALPACA_FRAME_A);
                     spike3.setX(p3X + 50);
-
                     this.time.delayedCall(200, () => {
                         if (!alpaca3.scene) return;
                         this.tweens.add({
-                            targets: spike3,
-                            x: p3X - 5, 
-                            duration: 600,
-                            onComplete: () => {
-                                alpaca3.setColor('#ff0000');
-                                this.time.delayedCall(800, animatePanel3); 
-                            }
+                            targets: spike3, x: p3X - 5, duration: 600,
+                            onComplete: () => { alpaca3.setColor('#ff0000'); this.time.delayedCall(800, animatePanel3); }
                         });
                     });
                 };
                 animatePanel3();
 
-                // ==========================================
-                // 底部 UI 與點擊跳轉
-                // ==========================================
                 const tapText = this.add.text(width / 2, height * 0.85, "> TAP TO START", { ...TEXT_STYLE, fontSize: '24px' }).setOrigin(0.5);
-                this.tweens.add({ 
-                    targets: tapText, 
-                    alpha: 0.4, 
-                    duration: 300,      // 文字淡出需 1 秒
-                    hold: 500,           // 【新增】文字全亮時，多停留 0.5 秒再開始淡出
-                    repeat: -1, 
-                    yoyo: true,          // 回來時也需要 1 秒淡入
-                    ease: 'Power1' 
-                });
+                this.tweens.add({ targets: tapText, alpha: 0.4, duration: 300, hold: 500, repeat: -1, yoyo: true, ease: 'Power1' });
 
                 this.input.once('pointerdown', () => {
-                    SFX.init(); // <--- 最關鍵這行：解鎖音訊引擎
-                    this.scene.start('GameScene'); // 直接進入遊戲
+                    SFX.init(); 
+                    this.scene.start('GameScene'); 
                 });
             }
         }
@@ -271,11 +382,19 @@
                 this.currentBeatIndex = 0;
                 this.score = 0;
                 this.isGameOver = false;
+                
+                // 【新增】Endless 模式變數設定
+                this.isEndless = false;
+                this.endlessMusic = this.sound.add('endlessMusic', { loop: true });
+                this.endlessStartTime = 0;
+                this.endlessSpeedMultiplier = 1.0;
+                this.baseTravelTime = INITIAL_TRAVEL_TIME; 
+                this.lastObstacleTime = 0;
+                this.lastLowPlatformTime = 0;
+                this.bonusScore = 0; 
                 this.currentTravelTime = INITIAL_TRAVEL_TIME;
 
                 this.add.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, 'bg').setOrigin(0.5).setDisplaySize(GAME_WIDTH, GAME_HEIGHT).setDepth(-1);
-                
-                //this.debugText = this.add.text(10, GAME_HEIGHT - 30, "TIME: 0", { ...TEXT_STYLE, fontSize: '12px' }).setDepth(100);
 
                 const floorY = GAME_HEIGHT * FLOOR_Y_RATIO;
                 const screenTopY = GAME_HEIGHT * 0.15;
@@ -315,30 +434,59 @@
                 this.gameTimeSec = 0;   
                 this.musicStarted = false;
 
-                // 虛擬前置量系統與勝利判定
                 this.time.delayedCall(this.AUDIO_DELAY * 1000, () => {
                     this.music.play();
                     this.musicStarted = true;
 
-                    // 在 GameScene 的 create 裡面
-                this.music.once('complete', () => {
-                    if (!this.isGameOver) {
-                        // --- 在結束前 0.5 秒生成獎盃 ---
-                        this.spawnTrophy();
-                        
-                        // 延遲一點點讓玩家看到獎盃再進勝利畫面
-                        this.time.delayedCall(1500, () => {
-                            this.isGameOver = true;
-                            this.physics.pause();
-                            this.scene.launch('GameWinScene', { score: this.score });
-                        });
-                    }
-                });
+                    // 【修改】第一階段結束後自動進入 Endless
+                   // 替換掉 GameScene 內 create() 裡的這段音樂結束邏輯
+                    this.music.once('complete', () => {
+                        if (!this.isGameOver) {
+                            // --- 在第一階段結束前生成獎盃 ---
+                            this.spawnTrophy();
+                            
+                            // 延遲一點點讓玩家看到獎盃，然後彈出通關結算畫面
+                            this.time.delayedCall(1500, () => {
+                                this.physics.pause(); // 暫停遊戲動態，讓畫面定格在背景
+                                this.scene.launch('GameWinScene'); // 啟動結算過場
+                            });
+                        }
+                    });
                 });
             }
 
-            jump() { if (this.isGameOver) return; if (this.alpaca.body.touching.down) { this.alpaca.body.setVelocityY(JUMP_VELOCITY); SFX.playJump(); } }
 
+            // 2. 修改 startEndlessMode，進入無盡模式時把獎盃砸碎(刪除)
+            startEndlessMode() {
+                if (this.isGameOver) return;
+                
+                this.isEndless = true;
+                this.endlessStartTime = this.gameTimeSec; 
+                this.bonusScore = 88888; 
+                
+                this.baseTravelTime = ENDLESS_INITIAL_TRAVEL_TIME; 
+                this.currentTravelTime = ENDLESS_INITIAL_TRAVEL_TIME;
+                
+                this.scoreText.setText("ENDLESS MODE");
+                this.alpaca.body.setGravityY(ENDLESS_GRAVITY);
+
+                // 【清除獎盃】
+                if (this.trophy) this.trophy.destroy();
+                
+                this.physics.resume(); 
+                this.endlessMusic.play();
+            }
+
+            // 替換 GameScene 內的 jump() 方法
+            jump() { 
+                if (this.isGameOver) return; 
+                if (this.alpaca.body.touching.down) { 
+                    // 根據是否在無盡模式，給予不同的跳躍初速
+                    let v = this.isEndless ? ENDLESS_JUMP_VELOCITY : JUMP_VELOCITY;
+                    this.alpaca.body.setVelocityY(v); 
+                    SFX.playJump(); 
+                } 
+            }
             spawnObject(type) {
                 if (this.isGameOver) return;
                 let targetY = GAME_HEIGHT * FLOOR_Y_RATIO, text = "", isPlatform = false;
@@ -368,34 +516,112 @@
                     onComplete: () => { obj.destroy(); } 
                 });
             }
+            
+            // 1. 修改 spawnTrophy，把獎盃存進變數中以便後續刪除
             spawnTrophy() {
                 const trophyY = GAME_HEIGHT * FLOOR_Y_RATIO;
-                // 在最右側生成獎盃，因為它是最後一刻出現，不用特別加上物理 collision
-                const trophy = this.add.text(GAME_WIDTH + 100, trophyY - 50, "🏆", { 
-                    fontSize: '40px' 
-                }).setOrigin(0.5, 1).setDepth(7);
-
-                // 讓獎盃有個帥氣的滑入與彈跳效果
-                this.tweens.add({
-                    targets: trophy,
-                    x: GAME_WIDTH * 0.75, // 滑到畫面 75% 的位置
-                    duration: 1000,
-                    ease: 'Back.easeOut', // 彈跳效果
-                    yoyo: false
-                });
+                this.trophy = this.add.text(GAME_WIDTH + 100, trophyY - 50, "🏆", { fontSize: '40px' }).setOrigin(0.5, 1).setDepth(7);
+                this.tweens.add({ targets: this.trophy, x: GAME_WIDTH * 0.75, duration: 1000, ease: 'Back.easeOut', yoyo: false });
             }
-            hitObstacle() { if (this.isGameOver) return; this.isGameOver = true; this.music.pause(); SFX.playDeath(); this.physics.pause(); this.alpaca.setColor('#ff0000'); this.time.delayedCall(500, () => this.scene.launch('GameOverScene', { score: this.score })); }
 
-           update(time, delta) {
+            // 【新增】Endless 隨機生成器
+            // 完整替換 GameScene 內的 generateEndlessObstacles 方法
+            generateEndlessObstacles(currentTime) {
+                // 計算距離上一個「組合發射完畢」經過了多少毫秒
+                let timeSinceLastObstacle = currentTime - this.lastObstacleTime;
+                
+                // 1. 安全限制：如果冷卻時間還沒到，直接攔截不生成 (由 ENDLESS_MIN_INTERVAL 控制組間距離)
+                if (timeSinceLastObstacle < ENDLESS_MIN_INTERVAL) return;
+                
+                // 隨機冷卻機率，避免時間一到就太規律地發射
+                if (Math.random() > 0.05) return;
+
+                // 2. 從組合池中隨機抽取一個關卡組合
+                let selectedPattern = Phaser.Utils.Array.GetRandom(ENDLESS_PATTERNS);
+
+                // 3. 遍歷該組合，依據固定時間差 (PATTERN_DELAY) 排程發射
+                selectedPattern.forEach((type, index) => {
+                    this.time.delayedCall(index * PATTERN_DELAY, () => {
+                        // 確保遊戲沒結束且還在無盡模式才真正生成
+                        if (!this.isGameOver && this.isEndless) {
+                            this.spawnObject(type);
+                        }
+                    });
+                });
+
+                // 4. 【核心防禦】計算這個組合總共會花費多少時間發射完畢
+                let patternTotalDuration = (selectedPattern.length - 1) * PATTERN_DELAY;
+                
+                // 將最後生成時間點「往後延伸」到該組合最後一個物件發射的時間
+                // 這樣下一組障礙物就絕對不會跟這一組的尾巴撞在一起！
+                this.lastObstacleTime = currentTime + patternTotalDuration;
+            }
+
+            hitObstacle() { 
+                if (this.isGameOver) return; 
+                this.isGameOver = true; 
+                
+                if (this.isEndless) {
+                    this.endlessMusic.pause();
+                } else {
+                    this.music.pause(); 
+                }
+                
+                SFX.playDeath(); 
+                this.physics.pause(); 
+                this.alpaca.setColor('#ff0000'); 
+                
+                // 【重要修改】傳遞 isEndless 給 GameOverScene 來決定要不要跳出輸入框
+                this.time.delayedCall(500, () => {
+                    this.scene.launch('GameOverScene', { score: this.score, isEndless: this.isEndless });
+                }); 
+            }
+
+            update(time, delta) {
                 if (this.isGameOver) return;
 
                 this.gameTimeSec += delta / 1000;
                 let currentAudioTime = this.gameTimeSec - this.AUDIO_DELAY;
                 
-                if (this.musicStarted) {
+                if (this.musicStarted && !this.isEndless) {
                     currentAudioTime = this.music.seek; 
                 }
 
+                // 【修改】計分與邏輯拆分 (無盡模式 vs 第一階段)
+                if (this.isEndless) {
+                    let endlessAliveSec = this.gameTimeSec - this.endlessStartTime;
+                    
+                    // 【平滑加速】每秒增加 0.005 倍率 (等於每 20 秒加快 10%)，極限鎖在 2.0 倍
+                    this.endlessSpeedMultiplier = Math.min(1.0 + (endlessAliveSec * 0.005), 2.0);
+                    this.currentTravelTime = this.baseTravelTime / this.endlessSpeedMultiplier;
+
+                    let currentEndlessScore = Math.floor(endlessAliveSec * 20 * this.endlessSpeedMultiplier);
+                    this.score = this.bonusScore + currentEndlessScore;
+                    this.scoreText.setText(`ENDLESS | ${String(this.score).padStart(6, '0')}`);
+                    
+                    this.generateEndlessObstacles(time);
+                } else {
+                    this.score += 20; 
+                    this.scoreText.setText(`SCORE: ${String(this.score).padStart(6, '0')}`);
+
+                    if (this.currentTravelTime > MIN_TRAVEL_TIME) {
+                        this.currentTravelTime -= SPEED_UP_RATE * (delta / 1000);
+                    }
+
+                    if (this.currentBeatIndex < this.beats.length) {
+                        const beat = this.beats[this.currentBeatIndex];
+                        const totalDist = GAME_WIDTH + 250; 
+                        const hitDist = (GAME_WIDTH + 50) - (GAME_WIDTH * ALPACA_X_RATIO); 
+                        const travelTimeSec = (hitDist / totalDist) * (this.currentTravelTime / 1000);
+
+                        if (currentAudioTime >= beat.time - travelTimeSec) {
+                            this.spawnObject(beat.type);
+                            this.currentBeatIndex++;
+                        }
+                    }
+                }
+
+                // 畫布與背景更新邏輯 (兩模式共用)
                 const currentFloorY = GAME_HEIGHT * FLOOR_Y_RATIO;
                 this.floorGraphics.clear();
                 this.floorGraphics.lineStyle(2, 0x00ff41, 1);
@@ -453,111 +679,263 @@
                     this.alpaca.setText(frameIndex === 0 ? ALPACA_FRAME_A : ALPACA_FRAME_B);
                 }
 
-                this.score += 20; 
-                this.scoreText.setText(`SCORE: ${String(this.score).padStart(6, '0')}`);
                 this.alpaca.setX(GAME_WIDTH * ALPACA_X_RATIO); 
                 this.alpaca.body.setVelocityX(0);
 
-                if (this.currentTravelTime > MIN_TRAVEL_TIME) {
-                    this.currentTravelTime -= SPEED_UP_RATE * (delta / 1000);
-                }
                 const cloudSpeed = ((GAME_WIDTH + 250) / (this.currentTravelTime / 1000)) * 0.2;
                 this.bgCloud1.x -= cloudSpeed * (delta / 1000); 
                 this.bgCloud2.x -= cloudSpeed * (delta / 1000);
                 if (this.bgCloud1.x + this.bgCloud1.width < 0) this.bgCloud1.x = this.bgCloud2.x + this.bgCloud2.width;
                 if (this.bgCloud2.x + this.bgCloud2.width < 0) this.bgCloud2.x = this.bgCloud1.x + this.bgCloud1.width;
-
-                if (this.currentBeatIndex < this.beats.length) {
-                    const beat = this.beats[this.currentBeatIndex];
-                    const totalDist = GAME_WIDTH + 250; 
-                    const hitDist = (GAME_WIDTH + 50) - (GAME_WIDTH * ALPACA_X_RATIO); 
-                    const travelTimeSec = (hitDist / totalDist) * (this.currentTravelTime / 1000);
-
-                    if (currentAudioTime >= beat.time - travelTimeSec) {
-                        this.spawnObject(beat.type);
-                        this.currentBeatIndex++;
-                    }
-                }
-
-                /*if (this.debugText) {
-                    const nextTime = this.beats[this.currentBeatIndex] ? this.beats[this.currentBeatIndex].time : 999;
-                    this.debugText.setText(`AUDIO TIME: ${currentAudioTime.toFixed(2)} | NEXT BEAT: ${nextTime.toFixed(2)}`);
-                }*/
             }
         }
 
+        // ==========================================
+        // 【替換】支援排行榜的 GameOverScene
+        // ==========================================
+        // ==========================================
+        // 【替換】支援排行榜標記的 GameOverScene
+        // ==========================================
+        // ==========================================
+        // 【替換】支援新舊玩家 UI 與 ASCII 排行榜的 GameOverScene
+        // ==========================================
+       // ==========================================
+        // 【替換】支援 pip 安裝進度條與精準箭頭標記的 GameOverScene
+        // ==========================================
         class GameOverScene extends Phaser.Scene { 
             constructor() { super('GameOverScene'); } 
-            init(data) { this.finalScore = data.score; } 
+            
+            init(data) { 
+                this.finalScore = data.score; 
+                this.isEndless = data.isEndless; 
+            } 
+            
             create() { 
                 this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.85).setOrigin(0).setDepth(20); 
                 
-                // 1. FATAL ERROR (純紅色字體 + 紅色光暈)
-                const goText = `> FATAL ERROR\n\n  07.11 NOW...WHAT?\n\n LIVE AT THE WALL\n\n SCORE: ${String(this.finalScore).padStart(6, '0')}`; 
-                
-                // 這裡我們不使用預設的 TEXT_STYLE，直接獨立寫死紅色的樣式
-                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.4, goText, { 
-                    fontFamily: FONT_FAMILY,
-                    fontSize: '24px', 
-                    align: 'center', 
-                    lineSpacing: 10,
-                    color: '#ff0000', // 字體紅色
-                    shadow: { offsetX: 0, offsetY: 0, color: '#ff0000', blur: 8, fill: true } // 光暈也強制改成紅色！
-                }).setOrigin(0.5).setDepth(21); 
-                
-                // 2. RESTART 按鈕 (維持原本的綠色設定)
-                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.65, "> TAP TO RESTART", { 
-                    ...TEXT_STYLE, 
-                    fontSize: '22px' 
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.18, "> FATAL ERROR", { 
+                    fontFamily: FONT_FAMILY, fontSize: '24px', align: 'center', color: '#ff0000',
+                    shadow: { offsetX: 0, offsetY: 0, color: '#ff0000', blur: 8, fill: true } 
                 }).setOrigin(0.5).setDepth(21); 
 
-                // 3. 讓按鈕閃爍的動畫
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.25, `SCORE: ${String(this.finalScore).padStart(6, '0')}`, {
+                    fontFamily: FONT_FAMILY, fontSize: '20px', color: '#ff0000'
+                }).setOrigin(0.5).setDepth(21);
+
+                this.showNameInputUI();
+            } 
+
+            showNameInputUI() {
+                const domZone = document.getElementById('leaderboard-input-zone');
+                const domInput = document.getElementById('player-name-input');
+                const domBtn = document.getElementById('submit-score-btn');
+                const domLabel = domZone.querySelector('label');
+                
+                let savedName = localStorage.getItem('malpaca_name') || '';
+
+                if (savedName) {
+                    domLabel.innerHTML = `> WELCOME BACK, <span style="color:#fff">${savedName}</span>_<br><span style="font-size:10px; color:#00aa29">(TAP INPUT TO CHANGE)</span>`;
+                    domInput.value = savedName;
+                } else {
+                    domLabel.innerHTML = "> ASSIGN CALLSIGN_";
+                    domInput.value = '';
+                }
+
+                domZone.style.display = 'block';
+
+                const executeUpload = async () => {
+                    let name = domInput.value.trim().toUpperCase();
+                    if (!name) name = 'ANON';
+                    localStorage.setItem('malpaca_name', name);
+                    domZone.style.display = 'none';
+                    
+                    // ==========================================
+                    // 【新增】超帥的 pip style ASCII 載入進度條
+                    // ==========================================
+                    let progressText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.45, "", { 
+                        ...TEXT_STYLE, fontSize: '14px', align: 'center', lineSpacing: 6 
+                    }).setOrigin(0.5).setDepth(22);
+
+                    let progress = 0;
+                    // 利用 Phaser 的計時器製造假載入動畫，極限卡在 98% 等 API
+                    let loadingTimer = this.time.addEvent({
+                        delay: 50,
+                        callback: () => {
+                            progress += Math.floor(Math.random() * 6) + 1;
+                            if (progress > 98) progress = 98; 
+                            
+                            // 產生 20 格的進度條 [#####---------------]
+                            let bars = Math.floor(progress / 5); 
+                            let barStr = '[' + '#'.repeat(bars) + '-'.repeat(20 - bars) + ']';
+                            progressText.setText(`> FETCHING LEADERBOARD...\n${barStr} ${progress}%`);
+                        },
+                        loop: true
+                    });
+                    
+                    // 背景默默發送網路請求
+                    await LootLocker.submitScore(name, this.finalScore);
+                    let rankData = await LootLocker.getRankings();
+                    
+                    // 網路請求完成！把進度條填滿到 100%
+                    loadingTimer.remove();
+                    progressText.setText(`> FETCHING LEADERBOARD...\n[####################] 100%`);
+                    
+                    // 停頓 0.3 秒讓玩家看清楚 100%，然後跳轉排行榜
+                    this.time.delayedCall(300, () => {
+                        progressText.destroy();
+                        this.renderLeaderboardCanvas(rankData);
+                    });
+                };
+
+                domBtn.onclick = () => executeUpload();
+                domInput.onkeydown = (e) => { if (e.key === 'Enter') executeUpload(); };
+            }
+
+            renderLeaderboardCanvas(data) {
+                // ... (前面的檢查與變數宣告不變)
+
+                let startY = GAME_HEIGHT * 0.38;
+                let myCurrentName = localStorage.getItem('malpaca_name').toUpperCase();
+
+                // 【羊駝跑步動畫區塊】
+                // 建立一個容器，讓羊駝在裡面移動
+                const alpacaText = this.add.text(GAME_WIDTH + 50, startY - 55, ALPACA_FRAME_A, { 
+                    fontFamily: FONT_FAMILY, fontSize: '10px', color: COLOR_MAIN, align: 'center' 
+                }).setOrigin(0.5).setDepth(22);
+
+                // 跑步動畫 Loop
+                this.time.addEvent({
+                    delay: 200,
+                    loop: true,
+                    callback: () => {
+                        alpacaText.setText(alpacaText.text === ALPACA_FRAME_A ? ALPACA_FRAME_B : ALPACA_FRAME_A);
+                    }
+                });
+
+                // 跑步路徑 (從右跑到左，超出螢幕後重置)
+                this.tweens.add({
+                    targets: alpacaText,
+                    x: -50,
+                    duration: 4000,
+                    repeat: -1,
+                    ease: 'Linear'
+                });
+
+                // 排行榜標題：設定在 startY
+                this.add.text(GAME_WIDTH / 2, startY, "========= RANKING =========", { 
+                    ...TEXT_STYLE, fontSize: '14px', color: COLOR_DIM 
+                }).setOrigin(0.5, 0).setDepth(22);
+                
+                // 定義一個固定的顯示寬度，讓所有人對齊在這一條線上
+                const displayWidth = 280; 
+                let isPlayerInTop5 = false;
+
+                data.top5.forEach((item, index) => {
+                    let rankNum = index + 1;
+                    let playerName = (item.metadata && item.metadata.trim()) ? item.metadata : (item.player && item.player.name ? item.player.name : 'ANON');
+                    let playerScore = String(item.score).padStart(6, '0');
+                    let isMe = (playerName.toUpperCase() === myCurrentName);
+
+                    if (isMe) isPlayerInTop5 = true;
+
+                    // 組合字串：名次 + 名字 + 分數
+                    let rowText = `${rankNum}. ${playerName.toUpperCase().padEnd(10, ' ')}  ${playerScore}`;
+                    
+                    // 畫出排版
+                    let textObj = this.add.text(GAME_WIDTH / 2, startY + 35 + (index * 28), rowText, { 
+                        fontFamily: FONT_FAMILY, fontSize: '16px', color: isMe ? '#00ff41' : COLOR_DIM,
+                        fixedWidth: displayWidth, align: 'left' // 強制對齊的關鍵
+                    }).setOrigin(0.5).setDepth(22);
+
+                    // 如果是你，畫箭頭 (在最右邊)
+                    if (isMe) {
+                        let arrow = this.add.text(GAME_WIDTH / 2 + (displayWidth / 2) + 25, startY + 35 + (index * 28), "<---", { 
+                            fontFamily: FONT_FAMILY, fontSize: '14px', color: '#00ff41' 
+                        }).setOrigin(0.5).setDepth(22);
+                        this.tweens.add({ targets: [textObj, arrow], alpha: 0.3, duration: 300, yoyo: true, repeat: -1 });
+                    }
+                });
+
+                // 如果不在榜上，顯示自己
+                if (!isPlayerInTop5) {
+                    this.add.text(GAME_WIDTH / 2, startY + 185, "----------------------", { ...TEXT_STYLE, fontSize: '14px', color: COLOR_DIM }).setOrigin(0.5).setDepth(22);
+                    
+                    let myRank = data.memberRank || "??";
+                    let myRowText = `${myRank}. ${myCurrentName.padEnd(10, ' ')}  ${String(this.finalScore).padStart(6, '0')}`;
+                    
+                    let myTextObj = this.add.text(GAME_WIDTH / 2, startY + 210, myRowText, { 
+                        fontFamily: FONT_FAMILY, fontSize: '16px', color: '#00ff41',
+                        fixedWidth: displayWidth, align: 'left' 
+                    }).setOrigin(0.5).setDepth(22);
+                    
+                    let myArrow = this.add.text(GAME_WIDTH / 2 + (displayWidth / 2) + 25, startY + 210, "<---", { 
+                        fontFamily: FONT_FAMILY, fontSize: '14px', color: '#00ff41' 
+                    }).setOrigin(0.5).setDepth(22);
+                    
+                    this.tweens.add({ targets: [myTextObj, myArrow], alpha: 0.4, duration: 400, yoyo: true, repeat: -1 });
+                }
+
+                this.showRestartUI();
+            }
+
+            showRestartUI() {
+                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.75, "> TAP TO RESTART", { ...TEXT_STYLE, fontSize: '22px' }).setOrigin(0.5).setDepth(21); 
+                this.tweens.add({ targets: tapText, alpha: 0, duration: 500, yoyo: true, repeat: -1 });
+                
+                this.input.once('pointerdown', () => { 
+                    const gs = this.scene.get('GameScene'); 
+                    if(gs.music) gs.music.stop(); 
+                    if(gs.endlessMusic) gs.endlessMusic.stop(); 
+                    this.scene.stop('GameScene'); 
+                    this.scene.start('TutorialScene'); 
+                }); 
+            }
+        }
+        class GameWinScene extends Phaser.Scene { 
+            constructor() { super('GameWinScene'); } 
+            create() { 
+                // 畫出半透明黑底背景
+                this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.85).setOrigin(0).setDepth(20); 
+                
+                // 通關文字與固定的 88888 分數
+                const winText = `> MISSION ACCOMPLISHED\n\n  07.11 NOW...WHAT?\n\n  LIVE AT THE WALL\n\nSCORE: ${String(88888).padStart(5, '0')}`; 
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.4, winText, { ...TEXT_STYLE, fontSize: '24px', align: 'center', lineSpacing: 10 }).setOrigin(0.5).setDepth(21); 
+                
+                // 提示文字改為引導至無盡模式
+                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.65, "> TAP TO ENTER\n  ENDLESS MODE", { ...TEXT_STYLE, fontSize: '20px', align: 'center', lineSpacing: 5 }).setOrigin(0.5).setDepth(21); 
+                
+                // 讓過場提示字也維持經典的閃爍效果
                 this.tweens.add({ 
                     targets: tapText, 
                     alpha: 0, 
-                    duration: 500,    // 閃爍速度
-                    yoyo: true,       // 變透明後自動變回來
-                    repeat: -1        // 無限循環
+                    duration: 500,    
+                    yoyo: true,       
+                    repeat: -1        
                 });
                 
                 this.input.once('pointerdown', () => { 
+                    // 取得底層 GameScene 的實例
                     const gs = this.scene.get('GameScene'); 
-                    if(gs.music) gs.music.stop(); 
-                    this.scene.stop('GameScene'); 
-                    this.scene.start('TutorialScene'); // 死掉後回到 Tutorial
+                    
+                    // 關閉這個過場場景
+                    this.scene.stop('GameWinScene'); 
+                    
+                    // 觸發 GameScene 開始無盡模式
+                    gs.startEndlessMode(); 
                 }); 
             } 
         }
         
-        class GameWinScene extends Phaser.Scene { 
-            constructor() { super('GameWinScene'); } 
-            init(data) { this.finalScore = data.score; } 
-            create() { 
-                this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x000000, 0.85).setOrigin(0).setDepth(20); 
-                const winText = `> MISSION ACCOMPLISHED\n\n  07.11 NOW...WHAT?\n\n  LIVE AT THE WALL\n\nSCORE: ${String(999999).padStart(6, '0')}`; 
-                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.4, winText, { ...TEXT_STYLE, fontSize: '24px', align: 'center', lineSpacing: 10 }).setOrigin(0.5).setDepth(21); 
-                const tapText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.65, "> TAP TO CONTINUE", { ...TEXT_STYLE, fontSize: '22px' }).setOrigin(0.5).setDepth(21); 
-                
-                this.input.once('pointerdown', () => { 
-                    const gs = this.scene.get('GameScene'); 
-                    if(gs.music) gs.music.stop(); 
-                    this.scene.stop('GameScene'); 
-                    this.scene.start('TutorialScene'); // 贏了也回到 Tutorial
-                }); 
-            } 
-        }
-        
-        // 把 StartScene 完全從這裡移除了，不會再找錯場景
         const config = {
             type: Phaser.AUTO,
-            parent: 'game-container', // 記得確保你的 index.html 裡面有一個 <div id="game-container"></div>
+            parent: 'game-container', 
             width: GAME_WIDTH,
             height: GAME_HEIGHT,
             backgroundColor: '#000000',
-            pixelArt: true,           // 【推薦】這會讓你的 ASCII 風格像素更清晰
+            pixelArt: true,           
             scale: {
-                mode: Phaser.Scale.FIT,             // 強制維持比例，避免變形
-                autoCenter: Phaser.Scale.CENTER_BOTH, // 自動置中
+                mode: Phaser.Scale.FIT,             
+                autoCenter: Phaser.Scale.CENTER_BOTH, 
             },
             physics: {
                 default: 'arcade',
@@ -571,23 +949,3 @@
     </script>
 </body>
 </html>
-
-/*
- ,. .,. ,.
-@" ◉ w ◉ "@
-.,   .   .,
-,u ''' u ,
-
-
-(◉３◉)
-
-
- /\
-/\*\
- ||     
-
-|▀▄▀▄
-|
-
-    
-*/
